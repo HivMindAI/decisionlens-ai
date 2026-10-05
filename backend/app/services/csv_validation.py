@@ -43,16 +43,7 @@ def normalize_header(header: object) -> str:
 
 
 def validate_csv_upload(filename: str | None, content: bytes) -> DatasetValidationResponse:
-    _validate_file(filename, content)
-    frame = _read_csv(content)
-    frame = _normalize_and_validate_columns(frame)
-
-    if frame.empty:
-        raise CSVValidationError("EMPTY_FILE", "The CSV contains no data rows.")
-
-    _validate_financial_values(frame)
-    frame = _validate_and_sort_dates(frame)
-    _validate_history(frame)
+    frame = load_validated_csv(filename, content)
 
     extra_columns = [
         column for column in frame.columns if column not in REQUIRED_COLUMNS and column != "_period"
@@ -65,6 +56,21 @@ def validate_csv_upload(filename: str | None, content: bytes) -> DatasetValidati
         required_columns=list(REQUIRED_COLUMNS),
         extra_columns=extra_columns,
     )
+
+
+def load_validated_csv(filename: str | None, content: bytes) -> pd.DataFrame:
+    """Return validated monthly data in canonical, chronological form."""
+    _validate_file(filename, content)
+    frame = _read_csv(content)
+    frame = _normalize_and_validate_columns(frame)
+
+    if frame.empty:
+        raise CSVValidationError("EMPTY_FILE", "The CSV contains no data rows.")
+
+    frame = _validate_financial_values(frame)
+    frame = _validate_and_sort_dates(frame)
+    _validate_history(frame)
+    return frame
 
 
 def _validate_file(filename: str | None, content: bytes) -> None:
@@ -177,9 +183,11 @@ def _validate_history(frame: pd.DataFrame) -> None:
         )
 
 
-def _validate_financial_values(frame: pd.DataFrame) -> None:
+def _validate_financial_values(frame: pd.DataFrame) -> pd.DataFrame:
+    validated_frame = frame.copy()
+
     for column in REQUIRED_COLUMNS[1:]:
-        numeric_values = pd.to_numeric(frame[column], errors="coerce")
+        numeric_values = pd.to_numeric(validated_frame[column], errors="coerce")
         finite_values = numeric_values.map(
             lambda value: pd.notna(value) and math.isfinite(float(value))
         )
@@ -202,3 +210,7 @@ def _validate_financial_values(frame: pd.DataFrame) -> None:
                 field=column,
                 row=int(invalid_index) + 2,
             )
+
+        validated_frame[column] = numeric_values
+
+    return validated_frame

@@ -4,14 +4,17 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.models.analytics import AnalysisSummaryResponse
 from app.models.datasets import (
     DatasetValidationResponse,
     ValidationErrorResponse,
     ValidationIssue,
 )
+from app.services.analytics import build_analysis_summary
 from app.services.csv_validation import (
     CSVValidationError,
     MAX_UPLOAD_SIZE_BYTES,
+    load_validated_csv,
     validate_csv_upload,
 )
 
@@ -68,10 +71,32 @@ async def health() -> dict[str, str]:
 async def validate_dataset(
     file: Annotated[UploadFile, File(description="Monthly financial data in CSV format")],
 ) -> DatasetValidationResponse:
+    filename, content = await _read_upload(file)
+    return validate_csv_upload(filename, content)
+
+
+@app.post(
+    "/api/v1/analysis/summary",
+    response_model=AnalysisSummaryResponse,
+    responses={
+        413: {"model": ValidationErrorResponse},
+        415: {"model": ValidationErrorResponse},
+        422: {"model": ValidationErrorResponse},
+    },
+)
+async def analysis_summary(
+    file: Annotated[UploadFile, File(description="Monthly financial data in CSV format")],
+) -> AnalysisSummaryResponse:
+    filename, content = await _read_upload(file)
+    frame = load_validated_csv(filename, content)
+    return build_analysis_summary(frame)
+
+
+async def _read_upload(file: UploadFile) -> tuple[str | None, bytes]:
+    filename = file.filename
     try:
         content = await file.read(MAX_UPLOAD_SIZE_BYTES + 1)
     finally:
         await file.close()
 
-    return validate_csv_upload(file.filename, content)
-
+    return filename, content
