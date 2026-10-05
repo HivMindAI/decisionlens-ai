@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -10,12 +10,18 @@ from app.models.datasets import (
     ValidationErrorResponse,
     ValidationIssue,
 )
+from app.models.simulation import WhatIfSimulationResponse
 from app.services.analytics import build_analysis_summary
 from app.services.csv_validation import (
     CSVValidationError,
     MAX_UPLOAD_SIZE_BYTES,
     load_validated_csv,
     validate_csv_upload,
+)
+from app.services.simulation import (
+    ScenarioValidationError,
+    build_what_if_simulation,
+    parse_scenario_json,
 )
 
 app = FastAPI(title="DecisionLens AI API", version="0.1.0")
@@ -36,6 +42,20 @@ app.add_middleware(
 async def csv_validation_error_handler(
     _request: Request,
     exc: CSVValidationError,
+) -> JSONResponse:
+    return _validation_error_response(exc)
+
+
+@app.exception_handler(ScenarioValidationError)
+async def scenario_validation_error_handler(
+    _request: Request,
+    exc: ScenarioValidationError,
+) -> JSONResponse:
+    return _validation_error_response(exc)
+
+
+def _validation_error_response(
+    exc: CSVValidationError | ScenarioValidationError,
 ) -> JSONResponse:
     payload = ValidationErrorResponse(
         error=ValidationIssue(
@@ -90,6 +110,29 @@ async def analysis_summary(
     filename, content = await _read_upload(file)
     frame = load_validated_csv(filename, content)
     return build_analysis_summary(frame)
+
+
+@app.post(
+    "/api/v1/simulations/what-if",
+    response_model=WhatIfSimulationResponse,
+    responses={
+        413: {"model": ValidationErrorResponse},
+        415: {"model": ValidationErrorResponse},
+        422: {"model": ValidationErrorResponse},
+    },
+)
+async def what_if_simulation(
+    file: Annotated[UploadFile, File(description="Monthly financial data in CSV format")],
+    scenario: Annotated[
+        str,
+        Form(description="JSON object containing scenario percentage adjustments"),
+    ] = "{}",
+) -> WhatIfSimulationResponse:
+    filename, content = await _read_upload(file)
+    adjustments = parse_scenario_json(scenario)
+    frame = load_validated_csv(filename, content)
+    analysis = build_analysis_summary(frame)
+    return build_what_if_simulation(analysis.forecast, adjustments)
 
 
 async def _read_upload(file: UploadFile) -> tuple[str | None, bytes]:
