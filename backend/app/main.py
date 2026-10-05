@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.models.analytics import AnalysisSummaryResponse
+from app.models.decisions import DecisionBriefResponse
 from app.models.datasets import (
     DatasetValidationResponse,
     ValidationErrorResponse,
@@ -18,6 +19,7 @@ from app.services.csv_validation import (
     load_validated_csv,
     validate_csv_upload,
 )
+from app.services.decisions import generate_decision_brief
 from app.services.simulation import (
     ScenarioValidationError,
     build_what_if_simulation,
@@ -110,6 +112,24 @@ async def analysis_summary(
     filename, content = await _read_upload(file)
     frame = load_validated_csv(filename, content)
     return build_analysis_summary(frame)
+
+
+@app.post(
+    "/api/v1/decisions/brief",
+    response_model=DecisionBriefResponse,
+    responses={
+        413: {"model": ValidationErrorResponse},
+        415: {"model": ValidationErrorResponse},
+        422: {"model": ValidationErrorResponse},
+    },
+)
+async def decision_brief(
+    file: Annotated[UploadFile, File(description="Monthly financial data in CSV format")],
+) -> DecisionBriefResponse:
+    filename, content = await _read_upload(file)
+    frame = load_validated_csv(filename, content)
+    analysis = build_analysis_summary(frame)
+    return await generate_decision_brief(analysis)
 
 
 @app.post(
