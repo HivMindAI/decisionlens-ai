@@ -255,7 +255,18 @@ def test_evidence_matches_deterministic_calculations() -> None:
 
     body = response.json()
     evidence = {item["id"]: item for item in body["evidence"]}
-    assert list(evidence) == ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]
+    assert list(evidence) == [
+        "E1",
+        "E2",
+        "E3",
+        "E4",
+        "E5",
+        "E6",
+        "E7",
+        "E8",
+        "E9",
+        "E10",
+    ]
     assert evidence["E1"]["value"] == body["latest_snapshot"]["operating_profit"]
     assert evidence["E2"]["value"] == body["latest_snapshot"]["operating_margin_pct"]
     assert evidence["E3"]["change"] == body["changes"]["operating_profit"][

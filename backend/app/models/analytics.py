@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.forecasting import ForecastSummary
+
 ChangeUnit = Literal["financial_units", "percentage_points"]
 EvidenceUnit = Literal["financial_units", "percent", "percentage_points"]
 Direction = Literal[
@@ -61,7 +63,7 @@ class ProfitChangeDecomposition(BaseModel):
 
 class EvidenceItem(BaseModel):
     id: str
-    type: Literal["snapshot", "comparison", "decomposition"]
+    type: Literal["snapshot", "comparison", "decomposition", "forecast"]
     metric: str
     period: str
     comparison_period: str | None = None
@@ -127,5 +129,6 @@ class AnalysisSummaryResponse(BaseModel):
     evidence: list[EvidenceItem]
     anomalies: list[StatisticalAnomaly]
     signals: list[BusinessSignal]
+    forecast: ForecastSummary
     series: list[MonthlyKPI]
     warnings: list[str] = Field(default_factory=list)

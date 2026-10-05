@@ -13,6 +13,7 @@ from app.models.analytics import (
     MonthlyKPI,
     ProfitChangeDecomposition,
 )
+from app.services.forecasting import build_forecast, build_forecast_evidence
 from app.services.insights import detect_latest_anomalies, generate_business_signals
 
 TWO_DECIMAL_PLACES = Decimal("0.01")
@@ -28,6 +29,8 @@ def build_analysis_summary(frame: pd.DataFrame) -> AnalysisSummaryResponse:
     changes = _calculate_changes(latest, previous, warnings)
     decomposition = _decompose_operating_profit_change(latest, previous)
     evidence = _build_evidence(latest, previous, changes, decomposition)
+    forecast = build_forecast(series)
+    evidence.extend(build_forecast_evidence(forecast))
     anomalies = detect_latest_anomalies(series, warnings)
     signals = generate_business_signals(latest, previous, changes, evidence)
 
@@ -42,6 +45,7 @@ def build_analysis_summary(frame: pd.DataFrame) -> AnalysisSummaryResponse:
         evidence=evidence,
         anomalies=anomalies,
         signals=signals,
+        forecast=forecast,
         series=series,
         warnings=warnings,
     )
