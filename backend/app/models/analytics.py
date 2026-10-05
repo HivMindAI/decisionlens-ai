@@ -11,6 +11,7 @@ Direction = Literal[
     "undefined",
     "not_applicable",
 ]
+Severity = Literal["low", "medium", "high"]
 
 
 class MonthlyKPI(BaseModel):
@@ -72,6 +73,48 @@ class EvidenceItem(BaseModel):
     statement: str
 
 
+class StatisticalAnomaly(BaseModel):
+    id: str
+    metric: Literal["revenue", "cogs", "operating_expenses", "operating_profit"]
+    period: str
+    comparison_period: str
+    direction: Literal["increase", "decrease"]
+    observed_change: float
+    change_unit: Literal["percent", "financial_units"]
+    historical_median_change: float
+    historical_observation_count: int
+    robust_z: float
+    severity: Severity
+    statement: str
+
+
+class BusinessSignal(BaseModel):
+    id: str
+    type: Literal[
+        "MARGIN_COMPRESSION",
+        "COST_GROWTH_OUTPACING_REVENUE",
+        "PROFIT_DETERIORATION",
+        "PROFIT_RECOVERY",
+        "REVENUE_DECLINE",
+    ]
+    severity: Severity
+    period: str
+    comparison_period: str
+    metrics: list[str]
+    measured_change: float
+    change_unit: Literal["financial_units", "percent", "percentage_points"]
+    classification: Literal[
+        "profit_declined",
+        "positive_to_loss",
+        "loss_deepened",
+        "profit_increased",
+        "loss_to_positive",
+        "loss_narrowed",
+    ] | None = None
+    statement: str
+    evidence_ids: list[str]
+
+
 class AnalysisSummaryResponse(BaseModel):
     status: Literal["ok"] = "ok"
     period_start: str
@@ -82,6 +125,7 @@ class AnalysisSummaryResponse(BaseModel):
     changes: AnalysisChanges
     profit_change_decomposition: ProfitChangeDecomposition
     evidence: list[EvidenceItem]
+    anomalies: list[StatisticalAnomaly]
+    signals: list[BusinessSignal]
     series: list[MonthlyKPI]
     warnings: list[str] = Field(default_factory=list)
-
