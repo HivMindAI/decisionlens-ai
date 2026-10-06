@@ -20,7 +20,12 @@ class DecisionBriefProvider(Protocol):
     name: str
     model: str
 
-    async def generate(self, context: DecisionContext) -> str: ...
+    async def generate(
+        self,
+        context: DecisionContext,
+        *,
+        correction: str | None = None,
+    ) -> str: ...
 
 
 class ProviderFailure(Exception):
@@ -56,34 +61,26 @@ class OpenAICompatibleDecisionBriefProvider:
         self.model = model
         self._timeout_seconds = timeout_seconds
         self._transport = transport
+        self._structured_outputs_supported = True
 
-    async def generate(self, context: DecisionContext) -> str:
-        payload = {
-            "model": self.model,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": _system_prompt()},
-                {
-                    "role": "user",
-                    "content": (
-                        "Create the decision brief from this allowlisted deterministic "
-                        "context only:\n"
-                        + json.dumps(
-                            context.model_dump(mode="json"),
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        )
-                    ),
-                },
-            ],
-        }
-
+    async def generate(
+        self,
+        context: DecisionContext,
+        *,
+        correction: str | None = None,
+    ) -> str:
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout_seconds,
                 transport=self._transport,
             ) as client:
+                use_structured_outputs = self._structured_outputs_supported
+                payload = _provider_payload(
+                    context,
+                    model=self.model,
+                    correction=correction,
+                    use_structured_outputs=use_structured_outputs,
+                )
                 response = await client.post(
                     self._endpoint,
                     headers={
@@ -92,6 +89,25 @@ class OpenAICompatibleDecisionBriefProvider:
                     },
                     json=payload,
                 )
+
+                # Compatibility is transport-only: JSON Object mode still flows through
+                # every application validator in decisions.py.
+                if use_structured_outputs and _json_schema_is_unsupported(response):
+                    self._structured_outputs_supported = False
+                    response = await client.post(
+                        self._endpoint,
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=_provider_payload(
+                            context,
+                            model=self.model,
+                            correction=correction,
+                            use_structured_outputs=False,
+                        ),
+                    )
+
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise ProviderFailure("provider_timeout") from exc
@@ -201,16 +217,136 @@ def _chat_completions_endpoint(base_url: str) -> str:
     return f"{normalized}/chat/completions"
 
 
+def build_decision_brief_schema(context: DecisionContext) -> dict[str, object]:
+    evidence_ids = [item.id for item in context.evidence]
+    return {
+        "type": "object",
+        "properties": {
+            "focus": {
+                "type": "string",
+                "enum": [item.value for item in DecisionFocus],
+            },
+            "headline": {"type": "string"},
+            "reasoning": {"type": "string"},
+            "evidence_ids": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": evidence_ids,
+                },
+                "minItems": 1,
+                "maxItems": 5,
+            },
+            "next_step": {
+                "type": "string",
+                "enum": [item.value for item in NextStepAction],
+            },
+        },
+        "required": [
+            "focus",
+            "headline",
+            "reasoning",
+            "evidence_ids",
+            "next_step",
+        ],
+        "additionalProperties": False,
+    }
+
+
+def _provider_payload(
+    context: DecisionContext,
+    *,
+    model: str,
+    correction: str | None,
+    use_structured_outputs: bool,
+) -> dict[str, object]:
+    messages = [
+        {"role": "system", "content": _system_prompt()},
+        {"role": "user", "content": _context_prompt(context)},
+    ]
+    if correction is not None:
+        messages.append(
+            {
+                "role": "user",
+                "content": _corrective_prompt(correction),
+            }
+        )
+
+    response_format: dict[str, object]
+    if use_structured_outputs:
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "decision_brief",
+                "strict": True,
+                "schema": build_decision_brief_schema(context),
+            },
+        }
+    else:
+        response_format = {"type": "json_object"}
+
+    return {
+        "model": model,
+        "temperature": 0,
+        "response_format": response_format,
+        "messages": messages,
+    }
+
+
+def _json_schema_is_unsupported(response: httpx.Response) -> bool:
+    if response.status_code not in {400, 422}:
+        return False
+
+    message = response.text.lower()
+    identifies_schema = any(
+        marker in message
+        for marker in ("json_schema", "response_format", "structured output")
+    )
+    identifies_unsupported = any(
+        marker in message
+        for marker in ("not supported", "unsupported", "does not support")
+    )
+    return identifies_schema and identifies_unsupported
+
+
 def _system_prompt() -> str:
-    focus_values = ", ".join(item.value for item in DecisionFocus)
-    action_values = ", ".join(item.value for item in NextStepAction)
     return (
-        "You produce one evidence-backed business Decision Brief. Use only the supplied "
-        "deterministic context. Never calculate business values, invent evidence, make "
-        "causal claims, create numeric recommendations, or use outside knowledge. The "
-        "headline and reasoning must be qualitative and must contain no numeric business "
-        "claims; evidence identifiers such as E1 are allowed. Cite one to five existing "
-        "evidence IDs, preferring at least two when supported. Select only an allowed focus "
-        f"({focus_values}) and next_step ({action_values}). Return only a JSON object with "
-        "exactly these keys: focus, headline, reasoning, evidence_ids, next_step."
+        "Return one evidence-backed Decision Brief as JSON only. Use only the supplied "
+        "deterministic context. Choose only supplied evidence IDs and never invent IDs. "
+        "Do not calculate, use outside knowledge, or make causal claims. Headline and "
+        "reasoning must be qualitative: no digits, percentages, monetary or financial "
+        "amounts, dates, number words, or repeated deterministic values. Evidence IDs such "
+        "as E4 belong only in evidence_ids, never in prose. DecisionLens renders verified "
+        "numbers separately. Return exactly focus, headline, reasoning, evidence_ids, and "
+        "next_step with no extra fields."
+    )
+
+
+def _context_prompt(context: DecisionContext) -> str:
+    context_payload = context.model_dump(mode="json")
+    evidence = context_payload.pop("evidence")
+    prompt = {
+        "task": "Select a qualitative Decision Brief from verified evidence.",
+        "allowed_evidence_ids": [item.id for item in context.evidence],
+        "verified_evidence_meanings": evidence,
+        "allowed_focus": [item.value for item in DecisionFocus],
+        "allowed_next_step": [item.value for item in NextStepAction],
+        "safe_deterministic_context": context_payload,
+        "rules": [
+            "Choose only supplied evidence IDs.",
+            "Do not invent IDs.",
+            "Do not calculate.",
+            "Do not write numbers in headline or reasoning.",
+            "Do not make causal claims.",
+        ],
+    }
+    return json.dumps(prompt, separators=(",", ":"), sort_keys=True)
+
+
+def _corrective_prompt(reason: str) -> str:
+    return (
+        f"The previous output was rejected by application validation: {reason}. "
+        "Return a corrected JSON object. Use only allowed evidence IDs and actions. "
+        "Headline and reasoning must contain no numbers, dates, amounts, percentages, "
+        "number words, or evidence IDs. Do not calculate or make causal claims."
     )

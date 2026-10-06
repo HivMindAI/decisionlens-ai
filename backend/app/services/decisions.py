@@ -85,6 +85,7 @@ NUMBER_WORD_PATTERN = re.compile(
     r"billion|first|second|third|half|quarter)\b",
     re.IGNORECASE,
 )
+MAX_PROVIDER_ATTEMPTS = 2
 
 
 class GeneratedBriefInvalid(Exception):
@@ -122,32 +123,46 @@ async def generate_decision_brief(
             model=setup.model,
         )
 
-    try:
-        content = await setup.provider.generate(context)
-    except ProviderFailure as exc:
-        return _fallback_response(
-            analysis,
-            reason=exc.code,
-            provider=setup.provider_name or setup.provider.name,
-            model=setup.model or setup.provider.model,
-        )
-    except Exception:
-        return _fallback_response(
-            analysis,
-            reason="provider_unavailable",
-            provider=setup.provider_name or setup.provider.name,
-            model=setup.model or setup.provider.model,
-        )
+    provider_name = setup.provider_name or setup.provider.name
+    model = setup.model or setup.provider.model
+    correction: str | None = None
 
-    try:
-        generated = _validate_provider_content(content, context)
-    except GeneratedBriefInvalid as exc:
-        return _fallback_response(
-            analysis,
-            reason=exc.code,
-            provider=setup.provider_name or setup.provider.name,
-            model=setup.model or setup.provider.model,
-        )
+    for attempt in range(MAX_PROVIDER_ATTEMPTS):
+        try:
+            content = await setup.provider.generate(
+                context,
+                correction=correction,
+            )
+        except ProviderFailure as exc:
+            return _fallback_response(
+                analysis,
+                reason=exc.code,
+                provider=provider_name,
+                model=model,
+            )
+        except Exception:
+            return _fallback_response(
+                analysis,
+                reason="provider_unavailable",
+                provider=provider_name,
+                model=model,
+            )
+
+        try:
+            generated = _validate_provider_content(content, context)
+        except GeneratedBriefInvalid as exc:
+            if attempt + 1 < MAX_PROVIDER_ATTEMPTS:
+                correction = exc.code
+                continue
+            return _fallback_response(
+                analysis,
+                reason=exc.code,
+                provider=provider_name,
+                model=model,
+            )
+        break
+    else:  # pragma: no cover - bounded loop always returns or breaks
+        raise RuntimeError("provider attempt loop exhausted unexpectedly")
 
     brief = _attach_action_text(generated)
     return DecisionBriefResponse(
@@ -155,8 +170,8 @@ async def generate_decision_brief(
         generation=DecisionGenerationMetadata(
             mode="llm",
             ai_used=True,
-            provider=setup.provider_name or setup.provider.name,
-            model=setup.model or setup.provider.model,
+            provider=provider_name,
+            model=model,
         ),
         supporting_evidence=_supporting_evidence(
             context.evidence,
