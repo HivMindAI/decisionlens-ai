@@ -194,10 +194,11 @@ export function DecisionWorkspace() {
 
         {analysisLoading && <AnalysisLoadingState />}
 
-        {analysis && (
+        {analysis && file && (
           <div className="mt-5 sm:mt-6">
             <AnalysisDashboard
               analysis={analysis}
+              file={file}
               brief={brief}
               briefError={briefError}
               briefLoading={briefLoading}

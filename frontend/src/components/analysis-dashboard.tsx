@@ -8,9 +8,11 @@ import type {
   Severity,
   StatisticalAnomaly,
 } from "@/lib/api";
+import { ScenarioSimulator } from "@/components/scenario-simulator";
 
 interface AnalysisDashboardProps {
   analysis: AnalysisSummaryResponse;
+  file: File;
   brief: DecisionBriefResponse | null;
   briefError: string | null;
   briefLoading: boolean;
@@ -51,6 +53,7 @@ const modelLabels: Record<string, string> = {
 
 export function AnalysisDashboard({
   analysis,
+  file,
   brief,
   briefError,
   briefLoading,
@@ -66,6 +69,7 @@ export function AnalysisDashboard({
       <ProfitBridge analysis={analysis} />
       <SignalsAndAnomalies analysis={analysis} />
       <ForecastOutlook analysis={analysis} />
+      <ScenarioSimulator file={file} />
       {(analysis.warnings.length > 0 || analysis.forecast.warnings.length > 0) && (
         <DataNotes
           notes={[...analysis.warnings, ...analysis.forecast.warnings]}
