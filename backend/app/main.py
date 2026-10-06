@@ -1,3 +1,4 @@
+import os
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -26,18 +27,37 @@ from app.services.simulation import (
     parse_scenario_json,
 )
 
+LOCAL_DEVELOPMENT_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+)
+
+
+def get_allowed_origins() -> list[str]:
+    configured_origins = os.getenv("DECISIONLENS_ALLOWED_ORIGINS")
+    if configured_origins is None:
+        return list(LOCAL_DEVELOPMENT_ORIGINS)
+
+    return [
+        origin.strip()
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ]
+
+
+def add_cors_middleware(application: FastAPI) -> None:
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=get_allowed_origins(),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+
 app = FastAPI(title="DecisionLens AI API", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+add_cors_middleware(app)
 
 
 @app.exception_handler(CSVValidationError)
